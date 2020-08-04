@@ -10,6 +10,90 @@
 #endif
 
 
+void save_frame_as_jpeg(AVCodecContext *pCodecCtx, AVFrame *pFrame, int FrameNo)
+{
+    AVCodec *jpegCodec = avcodec_find_encoder(AV_CODEC_ID_JPEG2000); //AV_CODEC_ID_MJPEG ////AV_CODEC_ID_PNG?
+    if (!jpegCodec)
+    {
+        return;
+    }
+    AVCodecContext *jpegContext = avcodec_alloc_context3(jpegCodec);
+    if (!jpegContext)
+    {
+        return;
+    }
+
+    jpegContext->pix_fmt = pCodecCtx->pix_fmt;  //
+    jpegContext->height = pFrame->height;
+    jpegContext->width = pFrame->width;
+
+//    pOCodecCtx->bit_rate = pCodecCtxOrig->bit_rate;
+//    pOCodecCtx->width = pCodecCtxOrig->width;
+//    pOCodecCtx->height = pCodecCtxOrig->height;
+//    pOCodecCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;
+//    pOCodecCtx->codec_id = AV_CODEC_ID_MJPEG;
+//    pOCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+//    pOCodecCtx->time_base.num = pCodecCtxOrig->time_base.num;
+//    pOCodecCtx->time_base.den = pCodecCtxOrig->time_base.den;
+//    jpegContext->time_base.num = pCodecCtx->time_base.num;
+//    jpegContext->time_base.den = pCodecCtx->time_base.den;
+    jpegContext->time_base = (AVRational){1,25};
+
+
+    if (avcodec_open2(jpegContext, jpegCodec, NULL) < 0)
+    {
+        return;
+    }
+    FILE *JPEGFile;
+    char JPEGFName[256];
+
+    AVPacket packet = {.data = NULL, .size = 0};
+    av_init_packet(&packet);
+    int gotFrame;
+
+    if (avcodec_encode_video2(jpegContext, &packet, pFrame, &gotFrame) < 0)
+    {
+        printf("Error encoding frame\n");
+        return;
+    }
+
+    sprintf(JPEGFName, "dvr-%d.jpg", FrameNo);
+    JPEGFile = fopen(JPEGFName, "wb");
+    fwrite(packet.data, 1, packet.size, JPEGFile);
+    fclose(JPEGFile);
+
+    av_free_packet(&packet);
+    avcodec_close(jpegContext);
+}
+
+void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame)
+{
+    FILE *pFile;
+    char szFilename[32];
+    int  y;
+
+    // Open file
+    sprintf(szFilename, "frame%d.ppm", iFrame);
+    pFile=fopen(szFilename, "wb");
+    if(pFile==NULL)
+    {
+        printf("pFile == NULL");
+        return;
+    }
+
+
+    // Write header
+    fprintf(pFile, "P6\n%d %d\n255\n", width, height);
+
+    // Write pixel data
+    for(y=0; y<height; y++)
+        fwrite(pFrame->data[0]+y*pFrame->linesize[0], 1, width*3, pFile);
+
+    // Close file
+    fclose(pFile);
+}
+
+
 
 int main(int argc, char *argv[])
 {
@@ -28,6 +112,9 @@ int main(int argc, char *argv[])
     int frameFinished;
     AVPacket packet;
 
+
+    AVCodec *pOCodec = NULL;
+    AVCodecContext *pOCodecCtx = NULL;
 
 // Open video file
     if(avformat_open_input(&pFormatCtx, "videoplayback", NULL, NULL)!=0)//argv[1]
@@ -85,10 +172,14 @@ int main(int argc, char *argv[])
     avcodec_parameters_to_context(pCodecCtx, pParam);
     avcodec_parameters_free(&pParam);
 
-// Open codec
+//// Open codec
     if(avcodec_open2(pCodecCtx, pCodec, NULL)<0)
         return -1; // Could not open codec
-
+//    pOCodecCtx = avcodec_alloc_context3(pOCodec);
+//    if (!pOCodecCtx) {
+//        fprintf(stderr, "Could not allocate codec\n");
+//        return 1;
+//    }
 
 
 // Allocate video frame
@@ -111,8 +202,44 @@ int main(int argc, char *argv[])
 // of AVPicture
     avpicture_fill((AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_RGB24,
                    pCodecCtx->width, pCodecCtx->height);
+    ////AV_PIX_FMT_YUVJ420P  AV_PIX_FMT_RGB24
 
-
+//    ////
+//
+//
+//
+//
+//
+//
+//
+//    pOCodecCtx->bit_rate = pCodecCtxOrig->bit_rate;
+//    pOCodecCtx->width = pCodecCtxOrig->width;
+//    pOCodecCtx->height = pCodecCtxOrig->height;
+//    pOCodecCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;
+//    pOCodecCtx->codec_id = AV_CODEC_ID_MJPEG;
+//    pOCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+//    pOCodecCtx->time_base.num = pCodecCtxOrig->time_base.num;
+//    pOCodecCtx->time_base.den = pCodecCtxOrig->time_base.den;
+//
+//    pOCodec = avcodec_find_encoder(pOCodecCtx->codec_id);
+//    if(!pOCodec)
+//    {
+//        fprintf(stderr, "Codec not found\n");
+//        return 1;
+//
+//    }
+//    else
+//        fprintf(stderr, "Codec with id CODEC_ID_MJPEG found\n");
+//
+//    if (avcodec_open2(pOCodecCtx, pOCodec, NULL) < 0) {
+//        fprintf(stderr, "Could not open codec\n");
+//        return 1;
+//    }
+//    else
+//        fprintf(stderr, "Codec was opened\n");
+//
+//
+//    ////
     // initialize SWS context for software scaling
     sws_ctx = sws_getContext(pCodecCtx->width,
                              pCodecCtx->height,
@@ -126,27 +253,65 @@ int main(int argc, char *argv[])
                              NULL
     );
 
-//    i=0;
+
+    ////
+
+
 //    while(av_read_frame(pFormatCtx, &packet)>=0)
 //    {
 //        // Is this a packet from the video stream?
 //        if(packet.stream_index==videoStream)
 //        {
 //            // Decode video frame
-//            avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
+//            avcodec_decode_video2(pOCodecCtx, pFrame, &frameFinished,
+//                                 &packet);
 //
 //            // Did we get a video frame?
 //            if(frameFinished)
 //            {
-//                // Convert the image from its native format to RGB
-//                sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data,
-//                          pFrame->linesize, 0, pCodecCtx->height,
-//                          pFrameRGB->data, pFrameRGB->linesize);
+//                printf("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
 //
-////                // Save the frame to disk
-////                if(++i<=5)
-////                    SaveFrame(pFrameRGB, pCodecCtx->width,
-////                              pCodecCtx->height, i);
+////                pCodecCtx->qmin = pCodecCtx->qmax = 3;
+////                pCodecCtx->mb_lmin = pCodecCtx->qmin * FF_QP2LAMBDA;
+////                pCodecCtx->mb_lmax = pCodecCtx->qmax * FF_QP2LAMBDA;
+////                pCodecCtx->flags |= AV_CODEC_FLAG_QSCALE;
+////
+////
+////
+////
+////
+////                pFrame->quality = 4;
+////                pFrame->pts = i;
+////
+////
+////
+////                int szBufferActual = avcodec_encode_video2(pCodecCtx, buffer, numBytes, pFrame);
+////                if(szBufferActual < 0)
+////                {
+////                    fprintf(stderr, "avcodec_encode_video error. return value = %d\n",szBufferActual);
+////                    return -1;
+////                }
+////
+////                if(++i%25==0) //++i < atoi(argv[2])
+////                {
+////                    /* Write JPEG to file */
+////                    char buf[32] = {0};
+////                    snprintf(buf,30,"fram%d.jpeg",i);
+////                    FILE *fdJPEG = fopen(buf, "wb");
+////                    int bRet = fwrite(buffer, sizeof(uint8_t), szBufferActual, fdJPEG);
+////                    fclose(fdJPEG);
+////
+////                    if (bRet != szBufferActual)
+////                    {
+////                        fprintf(stderr, "Error writing jpeg file\n");
+////                        return 1;
+////                    }
+////                    else
+////                        fprintf(stderr, "jpeg file was writed\n");
+////                }
+////                //else
+////                    //break;
+//
 //            }
 //        }
 //
@@ -155,20 +320,69 @@ int main(int argc, char *argv[])
 //    }
 
 
+    ////
+    i=0;
+    while(av_read_frame(pFormatCtx, &packet)>=0)
+    {
+        // Is this a packet from the video stream?
+        if(packet.stream_index==videoStream)
+        {
+            // Decode video frame
+            avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
 
-    avcodec_free_context(&pCodecCtx);
+            // Did we get a video frame?
+            if(frameFinished)
+            {
+                // Convert the image from its native format to RGB
+                sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data,
+                          pFrame->linesize, 0, pCodecCtx->height,
+                          pFrameRGB->data, pFrameRGB->linesize);
+
+                // Save the frame to disk
+                if(++i%25==0)
+                {
+//                    SaveFrame(pFrameRGB, pCodecCtx->width,
+//                              pCodecCtx->height, i);
+                    save_frame_as_jpeg(pCodecCtx, pFrame, i);
+                }
+
+
+            }
+        }
+
+        // Free the packet that was allocated by av_read_frame
+//        av_free_packet(&packet);
+    }
+
+
+
+
+
+
 //// Free the RGB image
 //    av_free(buffer);
-//    av_free(pFrameRGB);
+//    buffer = NULL;
+
+    av_frame_free(&pFrameRGB);
 //
 //// Free the YUV frame
-//    av_free(pFrame);
-//
+    av_free(pFrame);
+
+
+//    if (avcodec_is_open(pCodecCtx))
+//        printf("avcodecCTX_is_open\n");
+//    if (avcodec_is_open(pCodecCtxOrig))
+//        printf("avcodecORIG_is_open\n");
 //// Close the codecs
 //    avcodec_close(pCodecCtx);
-//    avcodec_close(pCodecCtxOrig);
-//
-//// Close the video file
-//    avformat_close_input(&pFormatCtx);
+//      avcodec_free_context(&pCodecCtxOrig);
+    avcodec_close(pCodecCtxOrig);
+
+    // Close the video file
+    avformat_close_input(&pFormatCtx);
+
+
+
+
     return 0;
 }
