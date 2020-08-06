@@ -4,97 +4,55 @@
 #include "libswscale/swscale.h"
 #include "libavutil/imgutils.h"
 #include "jpeglib.h"
-// compatibility with newer API
-#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(55,28,1)
-#define av_frame_alloc avcodec_alloc_frame
-#define av_frame_free avcodec_free_frame
-#endif
-
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_thread.h"
 
 void save_frame_as_jpeg(AVCodecContext *pCodecCtx, AVFrame *pFrame, int FrameNo)
 {
-    AVCodec *jpegCodec = avcodec_find_encoder(AV_CODEC_ID_MJPEG); //AV_CODEC_ID_MJPEG ////AV_CODEC_ID_PNG?
-    if (!jpegCodec)
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    char szFilename[32];
+
+    FILE *outfile;
+    sprintf(szFilename, "file%d.jpg", FrameNo);
+    if ((outfile = fopen(szFilename, "wb")) == NULL)
     {
-        return;
-    }
-    AVCodecContext *jpegContext = avcodec_alloc_context3(jpegCodec);
-    if (!jpegContext)
-    {
-        return;
-    }
-
-    jpegContext->pix_fmt = pCodecCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;  //pCodecCtx->pix_fmt
-    jpegContext->height = pFrame->height;
-    jpegContext->width = pFrame->width;
-
-//    pOCodecCtx->bit_rate = pCodecCtxOrig->bit_rate;
-//    pOCodecCtx->width = pCodecCtxOrig->width;
-//    pOCodecCtx->height = pCodecCtxOrig->height;
-//    pOCodecCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;
-//    pOCodecCtx->codec_id = AV_CODEC_ID_MJPEG;
-//    pOCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
-//    pOCodecCtx->time_base.num = pCodecCtxOrig->time_base.num;
-//    pOCodecCtx->time_base.den = pCodecCtxOrig->time_base.den;
-//    jpegContext->time_base.num = pCodecCtx->time_base.num;
-//    jpegContext->time_base.den = pCodecCtx->time_base.den;
-    jpegContext->bit_rate = pCodecCtx->bit_rate;
-    jpegContext->time_base = (AVRational){1,25};
-
-
-    if (avcodec_open2(jpegContext, jpegCodec, NULL) < 0)
-    {
-        return;
-    }
-    FILE *JPEGFile;
-    char JPEGFName[256];
-
-    AVPacket packet = {.data = NULL, .size = 0};
-    av_init_packet(&packet);
-    int gotFrame;
-
-
-
-    int ret;
-    ret = av_image_alloc(pFrame->data, pFrame->linesize, pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt, 32);
-    if (ret < 0)
-    {
-        printf("Could not allocate raw picture buffer\n");
+        fprintf(stderr, "can't open %s\n", szFilename);
         exit(1);
     }
+    jpeg_stdio_dest(&cinfo, outfile);
 
-    pFrame->pts = 1;
 
-    int got_output = 0;
-    ret = avcodec_encode_video2(pCodecCtx, &packet, pFrame, &got_output);
-    if (ret < 0)
+    cinfo.image_width = pCodecCtx->width;
+    cinfo.image_height = pCodecCtx->height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, 10, TRUE);
+//                    image_width             Width of image, in pixels
+//                    image_height            Height of image, in pixels
+//                    input_components        Number of color channels (samples per pixel)
+//                    in_color_space          Color space of source image
+    jpeg_start_compress(&cinfo, TRUE);
+
+    JSAMPROW row_pointer[1];        /* pointer to a single row */
+    int row_stride;                 /* physical row width in buffer */
+
+    row_stride = cinfo.image_width * 3;   /* JSAMPLEs per row in image_buffer */
+
+    while (cinfo.next_scanline < cinfo.image_height)
     {
-        printf("Error encoding frame\n");
-        //exit(1);
-        return;
+        row_pointer[0] = pFrame->data[0]+cinfo.next_scanline * row_stride;// &image_buffer
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
     }
 
-    if (got_output)
-    {
-        printf("got frame\n");
-        FILE* f = fopen("x.jpg", "wb");
-        fwrite(packet.data, 1, packet.size, f);
-        av_free_packet(&packet);
-    }
-
-    if (avcodec_encode_video2(jpegContext, &packet, pFrame, &gotFrame) < 0)
-    {
-        printf("Error encoding frame\n");
-        return;
-    }
-
-    sprintf(JPEGFName, "dvr-%d.jpg", FrameNo);
-    JPEGFile = fopen(JPEGFName, "wb");
-    fwrite(packet.data, 1, packet.size, JPEGFile);
-    fclose(JPEGFile);
-
-    av_free_packet(&packet);
-    avcodec_close(jpegContext);
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
 }
 
 
@@ -126,9 +84,6 @@ void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame)
         fwrite(pFrame->data[0]+y*pFrame->linesize[0], 1, width*3, pFile);
 
 
-
-
-
     // Close file
     fclose(pFile);
 }
@@ -152,10 +107,20 @@ int main(int argc, char *argv[])
     int frameFinished;
     AVPacket packet;
 
+    if(argc < 2)
+    {
+        fprintf(stderr, "Usage: test <file>\n");
+        exit(1);
+    }
+    if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER))
+    {
+        fprintf(stderr, "Could not initialize SDL - %s\n", SDL_GetError());
+        exit(1);
+    }
 
 
 // Open video file
-    if(avformat_open_input(&pFormatCtx, "videoplayback", NULL, NULL)!=0)//argv[1]
+    if(avformat_open_input(&pFormatCtx, argv[1], NULL, NULL)!=0)//argv[1]
     {
         printf("Couldn't open file\n");
         return -1; // Couldn't open file
@@ -170,7 +135,7 @@ int main(int argc, char *argv[])
     }
 
     // Dump information about file onto standard error
-    av_dump_format(pFormatCtx, 0, "videoplayback", 0);
+    av_dump_format(pFormatCtx, 0, argv[1], 0);
 
 
 
@@ -213,11 +178,7 @@ int main(int argc, char *argv[])
 //// Open codec
     if(avcodec_open2(pCodecCtx, pCodec, NULL)<0)
         return -1; // Could not open codec
-//    pOCodecCtx = avcodec_alloc_context3(pOCodec);
-//    if (!pOCodecCtx) {
-//        fprintf(stderr, "Could not allocate codec\n");
-//        return 1;
-//    }
+
 
 
 // Allocate video frame
@@ -228,8 +189,29 @@ int main(int argc, char *argv[])
         return -1;
 
 
+
+
+
+    SDL_Window *window = SDL_CreateWindow(
+            "SDL2Test",
+            SDL_WINDOWPOS_UNDEFINED,
+            SDL_WINDOWPOS_UNDEFINED,
+            pCodecCtx->width,
+            pCodecCtx->height,
+            0
+    );
+//    screen = SDL_SetVideoMode(pCodecCtx->width, pCodecCtx->height, 0, 0);
+//    if(!screen)
+//    {
+//        fprintf(stderr, "SDL: could not set video mode - exiting\n");
+//        exit(1);
+//    }
+
+
+
+
 // Determine required buffer size and allocate buffer
-    numBytes=avpicture_get_size(AV_PIX_FMT_RGB24, pCodecCtx->width,
+    numBytes=avpicture_get_size(AV_PIX_FMT_YUV420P, pCodecCtx->width,
                                 pCodecCtx->height);
     buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
 
@@ -238,46 +220,52 @@ int main(int argc, char *argv[])
     // Assign appropriate parts of buffer to image planes in pFrameRGB
 // Note that pFrameRGB is an AVFrame, but AVFrame is a superset
 // of AVPicture
-    avpicture_fill((AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_RGB24,
+    avpicture_fill((AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_YUV420P,
                    pCodecCtx->width, pCodecCtx->height);
-    ////AV_PIX_FMT_YUVJ420P  AV_PIX_FMT_RGB24
+    ////AV_PIX_FMT_YUV420P  AV_PIX_FMT_RGB24
 
-//    ////
-//
-//
-//
-//    pCodecCtx->pix_fmt = AV_PIX_FMT_YUVJ420P;
-//    pCodecCtx->codec_id = AV_CODEC_ID_MJPEG;
-//    pCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
-//    pCodecCtx->time_base.num = pCodecCtx->time_base.num;
-//    pCodecCtx->time_base.den = pCodecCtx->time_base.den;
-//
-//    pFrame->width = pCodecCtx->width;
-//    pFrame->height = pCodecCtx->height;
-//
-//
-//    pCodec = avcodec_find_encoder(pCodecCtx->codec_id);
-//    if(!pCodec)
-//    {
-//        fprintf(stderr, "Codec not found\n");
-//        return 1;
-//
-//    }
-//    else
-//        fprintf(stderr, "Codec with id CODEC_ID_MJPEG found\n");
-//
-//
 
+
+
+//    SDL_Overlay     *bmp = NULL;
 //
-//
-//    ////
+//    bmp = SDL_CreateYUVOverlay(pCodecCtx->width, pCodecCtx->height,
+//                               SDL_YV12_OVERLAY, screen);
+    SDL_Event event;
+    SDL_Renderer *renderer;
+    SDL_Texture *texture;
+    Uint8 *yPlane, *uPlane, *vPlane;
+    size_t yPlaneSz, uvPlaneSz;
+    int uvPitch;
+
+    renderer = SDL_CreateRenderer(window, -1, 0);
+    if (!renderer) {
+        fprintf(stderr, "SDL: could not create renderer - exiting\n");
+        exit(1);
+    }
+
+
+
+    texture = SDL_CreateTexture(
+            renderer,
+            SDL_PIXELFORMAT_YV12,
+            SDL_TEXTUREACCESS_STREAMING,
+            pCodecCtx->width,
+            pCodecCtx->height
+    );
+    if (!texture) {
+        fprintf(stderr, "SDL: could not create texture - exiting\n");
+        exit(1);
+    }
+
+
     // initialize SWS context for software scaling
     sws_ctx = sws_getContext(pCodecCtx->width,
                              pCodecCtx->height,
                              pCodecCtx->pix_fmt,
                              pCodecCtx->width,
                              pCodecCtx->height,
-                             AV_PIX_FMT_RGB24,
+                             AV_PIX_FMT_YUV420P,
                              SWS_BILINEAR,
                              NULL,
                              NULL,
@@ -285,129 +273,128 @@ int main(int argc, char *argv[])
     ); ///SWS_BILINEAR
 
 
-    ////
+    // set up YV12 pixel array (12 bits per pixel)
+    yPlaneSz = pCodecCtx->width * pCodecCtx->height;
+    uvPlaneSz = pCodecCtx->width * pCodecCtx->height / 4;
+    yPlane = (Uint8*)malloc(yPlaneSz);
+    uPlane = (Uint8*)malloc(uvPlaneSz);
+    vPlane = (Uint8*)malloc(uvPlaneSz);
+    if (!yPlane || !uPlane || !vPlane) {
+        fprintf(stderr, "Could not allocate pixel buffers - exiting\n");
+        exit(1);
+    }
+
+    uvPitch = pCodecCtx->width / 2;
 
 
 
-
-
-    ////
+    double fps = 0;
+    fps = (double)pFormatCtx->streams[videoStream]->r_frame_rate.num / (double)pFormatCtx->streams[videoStream]->r_frame_rate.den;
+//    fps = pCodecCtx->framerate.num / pCodecCtx->framerate.den;
+    printf("%f ",fps);
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     i=0;
+    double pts;
     while(av_read_frame(pFormatCtx, &packet)>=0)
     {
         // Is this a packet from the video stream?
         if(packet.stream_index==videoStream)
         {
+            pts = 0;
             // Decode video frame
             avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
 
+            if(packet.dts != AV_NOPTS_VALUE) {
+                pts = av_frame_get_best_effort_timestamp(pFrame);
+            } else {
+                pts = 0;
+            }
+            pts *= av_q2d(pFormatCtx->streams[videoStream]->time_base);
             // Did we get a video frame?
             if(frameFinished)
             {
 //                 Convert the image from its native format to RGB
-                sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data,
-                          pFrame->linesize, 0, pCodecCtx->height,
-                          pFrameRGB->data, pFrameRGB->linesize);
+//                sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, pFrameRGB->data, pFrameRGB->linesize);
 
 
 
+                AVPicture pict;
+                pict.data[0] = yPlane;
+                pict.data[1] = uPlane;
+                pict.data[2] = vPlane;
+                pict.linesize[0] = pCodecCtx->width;
+                pict.linesize[1] = uvPitch;
+                pict.linesize[2] = uvPitch;
 
-//                int ret = av_image_alloc(pFrame->data, pFrame->linesize, pCodecCtx->width, pCodecCtx->height, AV_PIX_FMT_YUVJ420P, 32);
-//                if (ret < 0)
+                // Convert the image into YUV format that SDL uses
+                sws_scale(sws_ctx, (uint8_t const * const *) pFrame->data, pFrame->linesize, 0, pCodecCtx->height, pict.data, pict.linesize);
+
+                SDL_UpdateYUVTexture(
+                        texture,
+                        NULL,
+                        yPlane,
+                        pCodecCtx->width,
+                        uPlane,
+                        uvPitch,
+                        vPlane,
+                        uvPitch
+                );
+
+                SDL_RenderClear(renderer);
+                SDL_RenderCopy(renderer, texture, NULL, NULL);
+                SDL_RenderPresent(renderer);
+                SDL_Delay(1000 / fps);
+//                printf("%d ",pCodecCtx->frame_number);
+//                // Save the frame to disk
+//                if(++i%25==0)
 //                {
-//                    printf("Could not allocate raw picture buffer\n");
-//                    exit(1);
+//
+////                    SaveFrame(pFrameRGB, pCodecCtx->width, pCodecCtx->height, i);
+////                    save_frame_as_jpeg(pCodecCtx, pFrameRGB, i);
 //                }
-//
-//
-//                av_init_packet(&packet);
-//                packet.data = NULL;
-//                packet.size = 0;
-//
-//                for(int y=0;y<pCodecCtx->height;y++) {
-//                    for(int x=0;x<pCodecCtx->width;x++) {
-//                        pFrame->data[0][y * pFrame->linesize[0] + x] = x + y;
-//                    }
-//                }
-//
-//                for(int y=0;y<pCodecCtx->height/2;y++) {
-//                    for(int x=0;x<pCodecCtx->width/2;x++) {
-//                        pFrame->data[1][y * pFrame->linesize[1] + x] = 128 + y;
-//                        pFrame->data[2][y * pFrame->linesize[2] + x] = 64 + x;
-//                    }
-//                }
-//
-//                pFrame->pts = 1;
-//
-//
-//                int got_output = 0;
-//                ret = avcodec_encode_video2(pCodecCtx, &packet, pFrame, &got_output);
-//                if (ret < 0)
-//                {
-//                    printf("Error encoding frame\n");
-//                    exit(1);
-//                }
-//
-//                if (got_output)
-//                {
-//                    printf("got frame\n");
-//                    FILE* f = fopen("x.jpg", "wb");
-//                    fwrite(packet.data, 1, packet.size, f);
-////                    av_free_packet(&pkt);
-//                }
-
-
-
-
-
-
-
-
-                // Save the frame to disk
-                if(++i%25==0)
-                {
-                    SaveFrame(pFrameRGB, pCodecCtx->width,
-                              pCodecCtx->height, i);
-//                    save_frame_as_jpeg(pCodecCtx, pFrame, i);
-                }
 
 
             }
         }
 
         // Free the packet that was allocated by av_read_frame
-        av_free_packet(&packet);
+        //av_free_packet(&packet);////DEPRECATED
+        av_packet_unref(&packet);
+        SDL_PollEvent(&event);
+        switch (event.type)
+        {
+        case SDL_QUIT:
+            SDL_DestroyTexture(texture);
+            SDL_DestroyRenderer(renderer);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+                break;
+        default:
+            break;
+        }
     }
 
-
-
-
-
+//// Free the YUV frame
+av_frame_free(&pFrame);
+free(yPlane);
+free(uPlane);
+free(vPlane);
 
 //// Free the RGB image
-//    av_free(buffer);
+    av_free(buffer);
 //    buffer = NULL;
 
     av_frame_free(&pFrameRGB);
 //
 //// Free the YUV frame
     av_free(pFrame);
-
-
-//    if (avcodec_is_open(pCodecCtx))
-//        printf("avcodecCTX_is_open\n");
-//    if (avcodec_is_open(pCodecCtxOrig))
-//        printf("avcodecORIG_is_open\n");
 //// Close the codecs
 //    avcodec_close(pCodecCtx);
 //      avcodec_free_context(&pCodecCtxOrig);
     avcodec_close(pCodecCtxOrig);
-
+    avcodec_close(pCodecCtx);
     // Close the video file
     avformat_close_input(&pFormatCtx);
-
-
-
 
     return 0;
 }
