@@ -6,6 +6,9 @@
 #include "jpeglib.h"
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_thread.h"
+#include <time.h>
+#include <stdlib.h>
+
 
 void save_frame_as_jpeg(AVCodecContext *pCodecCtx, AVFrame *pFrame, int FrameNo)
 {
@@ -55,9 +58,6 @@ void save_frame_as_jpeg(AVCodecContext *pCodecCtx, AVFrame *pFrame, int FrameNo)
     jpeg_destroy_compress(&cinfo);
 }
 
-
-
-
 void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame)
 {
     FILE *pFile;
@@ -89,7 +89,6 @@ void SaveFrame(AVFrame *pFrame, int width, int height, int iFrame)
 }
 
 
-
 int main(int argc, char *argv[])
 {
     av_register_all();
@@ -106,6 +105,13 @@ int main(int argc, char *argv[])
     struct SwsContext *sws_ctx = NULL;
     int frameFinished;
     AVPacket packet;
+    AVStream *stream = NULL;
+
+
+    double arg = strtod(argv[2], NULL);
+//    arg /= 100;
+    printf("EEEEEEEEE %f\n",arg);
+
 
     if(argc < 2)
     {
@@ -138,6 +144,14 @@ int main(int argc, char *argv[])
     av_dump_format(pFormatCtx, 0, argv[1], 0);
 
 
+//    stream = avformat_new_stream(pFormatCtx, pCodec);
+//         if (!stream)
+//         {
+//             fprintf(stderr, "Could not allocate stream\n");
+//             exit(1);
+//         }
+//    stream->id = pFormatCtx->nb_streams-1;
+//    pCodecCtxOrig = stream->codec;
 
 // Find the first video stream
     videoStream=-1;
@@ -238,6 +252,15 @@ int main(int argc, char *argv[])
     size_t yPlaneSz, uvPlaneSz;
     int uvPitch;
 
+
+
+
+
+
+
+
+
+
     renderer = SDL_CreateRenderer(window, -1, 0);
     if (!renderer) {
         fprintf(stderr, "SDL: could not create renderer - exiting\n");
@@ -291,30 +314,72 @@ int main(int argc, char *argv[])
     double fps = 0;
     fps = (double)pFormatCtx->streams[videoStream]->r_frame_rate.num / (double)pFormatCtx->streams[videoStream]->r_frame_rate.den;
 //    fps = pCodecCtx->framerate.num / pCodecCtx->framerate.den;
-    printf("%f ",fps);
+//    frame.pts = av_rescale_q(packet.pts, packetTimeBase, frameTimeBase);
+//    pFrame->pts = av_rescale_q(packet.pts, pFormatCtx->streams[videoStream]->time_base, pCodecCtx->time_base);
+//    printf("%ld", pFrame->pts);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     i=0;
-    double pts;
+
+
+    static int PTS = 0;
+    static int PTS2 = 0;
+    long double msec = 0;
+    struct timespec time1, time2;
+
+
+
+    AVRational a = {1, 1000};
+    clock_gettime(CLOCK_REALTIME, &time2);
     while(av_read_frame(pFormatCtx, &packet)>=0)
     {
         // Is this a packet from the video stream?
         if(packet.stream_index==videoStream)
         {
-            pts = 0;
+            ///pts = 0;
             // Decode video frame
             avcodec_decode_video2(pCodecCtx, pFrame, &frameFinished, &packet);
 
-            if(packet.dts != AV_NOPTS_VALUE) {
-                pts = av_frame_get_best_effort_timestamp(pFrame);
-            } else {
-                pts = 0;
-            }
-            pts *= av_q2d(pFormatCtx->streams[videoStream]->time_base);
+
+
+
+
+
+
+
+
             // Did we get a video frame?
             if(frameFinished)
             {
 //                 Convert the image from its native format to RGB
 //                sws_scale(sws_ctx, (uint8_t const * const *)pFrame->data, pFrame->linesize, 0, pCodecCtx->height, pFrameRGB->data, pFrameRGB->linesize);
+
+                pFrame->pts = av_rescale_q(packet.pts, pFormatCtx->streams[videoStream]->time_base, a);
+//            pFrame->pts = packet.pts / pFormatCtx->streams[videoStream]->time_base * pCodecCtx->time_base;
+                PTS = pFrame->pts;
+
+
+//                msec = 1000000*(time1.tv_sec - time2.tv_sec)+(time1.tv_nsec - time2.tv_nsec);
+//            printf("%ld\n",time1.tv_nsec/100000);
+
+
+
+                while (TRUE)
+                {
+                    clock_gettime(CLOCK_REALTIME, &time1);
+                    msec = 1000*(time1.tv_sec - time2.tv_sec) + (time1.tv_nsec - time2.tv_nsec)/1000000;
+//            printf("%ld\n",time1.tv_nsec/100000);
+                    if (PTS <= msec * arg)
+                        break;
+                }
+                    printf("Time from start video = %Lf\n", msec);
+
+                //time1 = time2;
+
+
+
+
+
+
 
 
 
@@ -343,7 +408,19 @@ int main(int argc, char *argv[])
                 SDL_RenderClear(renderer);
                 SDL_RenderCopy(renderer, texture, NULL, NULL);
                 SDL_RenderPresent(renderer);
-                SDL_Delay(1000 / fps);
+
+                //clock_gettime(CLOCK_REALTIME, &time2);
+
+
+//                SDL_Delay(PTS - PTS2);
+
+
+
+                PTS2 = PTS;
+                printf("Current PTS = %d\n",PTS);
+//                SDL_Delay(fps);
+//                printf("%f ",fps);
+//                SDL_Delay(1000 / fps);
 //                printf("%d ",pCodecCtx->frame_number);
 //                // Save the frame to disk
 //                if(++i%25==0)
